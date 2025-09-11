@@ -745,7 +745,7 @@ def main():
 
     # PL rate chart with toggle (unchanged)
     st.markdown("---")
-    st.subheader("PL rate vs Block Size (from AN_vs_PL.csv)")
+    st.subheader("PL rate vs Block Size")
     bars_as_percent = st.toggle("Show bars as % of total", value=True)
     if {"BLOCK_SIZE", "IF_ANY_PL"}.issubset(df_f.columns):
         if df_f.empty:
