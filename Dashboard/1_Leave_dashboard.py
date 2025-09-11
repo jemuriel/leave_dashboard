@@ -14,7 +14,7 @@ st.set_page_config(page_title="Leave Granularity", layout="wide")
 
 # DEFAULT_PL_CSV = r"C:\Users\61432\OneDrive - Pacific National\Leave_data\dashboard_data\AN_vs_PL_latest.csv"
 # Resolve project root dynamically
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).parent.parent
 CSV_FOLDER = PROJECT_ROOT / "csv"
 
 # Updated path
