@@ -25,7 +25,8 @@ last_seg_per_name = df.groupby("NAME")["seg_id"].transform("max")
 valid_between = between & (df["seg_id"] < last_seg_per_name)
 
 # Convenience flags
-is_AN = df["TASK"].eq("AN")
+# is_AN = df["TASK"].eq("AN")
+is_AN = df["TASK_CTT_CODE"].eq("AN")
 is_PL = df["TASK"].eq("PL")
 
 # --- Per-segment stats over valid-between rows ---
@@ -87,4 +88,4 @@ df.loc[first_idx_per_seg, out_cols.columns] = first_values[out_cols.columns].to_
 df = df.drop(columns=["seg_id"])
 
 # Save
-df.to_csv(r"C:\Users\61432\OneDrive - Pacific National\Leave_data\leave_analysis_latest.csv", index=False)
+df.to_csv(r"C:\Users\61432\OneDrive - Pacific National\Leave_data\leave_analysis_latest_AN.csv", index=False)

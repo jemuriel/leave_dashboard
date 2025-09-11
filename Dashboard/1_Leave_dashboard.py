@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 CSV_FOLDER = PROJECT_ROOT / "csv"
 
 # Updated path
-DEFAULT_PL_CSV = CSV_FOLDER / "AN_vs_PL_latest.csv"
+DEFAULT_PL_CSV = CSV_FOLDER / "AN_vs_PL_latest_AN.csv"
 SENTINEL_YEARS = 125  # special value
 
 # -----------------------------------------------------------------------------
