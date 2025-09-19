@@ -14,11 +14,11 @@ st.set_page_config(page_title="Leave Granularity", layout="wide")
 
 # DEFAULT_PL_CSV = r"C:\Users\61432\OneDrive - Pacific National\Leave_data\dashboard_data\AN_vs_PL_latest.csv"
 # Resolve project root dynamically
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CSV_FOLDER = PROJECT_ROOT / "csv"
 
 # Updated path
-DEFAULT_PL_CSV = CSV_FOLDER / "AN_vs_PL_latest_AN.csv"
+DEFAULT_PL_CSV = CSV_FOLDER / "an_pl_data.csv"
 SENTINEL_YEARS = 125  # special value
 
 # -----------------------------------------------------------------------------
@@ -257,26 +257,16 @@ def sidebar_filter_controls(df: pd.DataFrame):
                 key="sel_gender",
             )
 
-        sel_pers_grade = None
-        if "PERS_GRADE" in _base.columns:
-            grade_opts = sorted(_base["PERS_GRADE"].dropna().unique().tolist())
-            prev_sel_grade = st.session_state.get("sel_pers_grade", grade_opts)
-            sel_pers_grade = st.multiselect(
-                "PERS_GRADE",
-                options=grade_opts,
-                default=[g for g in prev_sel_grade if g in grade_opts] if grade_opts else None,
-                key="sel_pers_grade",
-            )
-
-        sel_jobtitle = None
-        if "JOBTITLE" in _base.columns:
-            job_opts = sorted(_base["JOBTITLE"].dropna().unique().tolist())
-            prev_sel_job = st.session_state.get("sel_jobtitle", job_opts)
-            sel_jobtitle = st.multiselect(
-                "JOBTITLE",
+        # Row 3: job type
+        sel_job = None
+        if "JOB_TYPE" in _base.columns:
+            job_opts = sorted(_base["JOB_TYPE"].dropna().unique().tolist())
+            prev_sel_job = st.session_state.get("sel_job", job_opts)
+            sel_job = st.multiselect(
+                "JOB_TYPE",
                 options=job_opts,
-                default=[j for j in prev_sel_job if j in job_opts] if job_opts else None,
-                key="sel_jobtitle",
+                default=[g for g in prev_sel_job if g in job_opts] if job_opts else None,
+                key="sel_job",
             )
 
         # Row 3: Years-of-work slider with 125 inclusion logic
@@ -331,8 +321,7 @@ def sidebar_filter_controls(df: pd.DataFrame):
             sel_depo_groups=sel_depo_groups,
             sel_depos=sel_depos,
             sel_gender=sel_gender,
-            sel_pers_grade=sel_pers_grade,
-            sel_jobtitle=sel_jobtitle,
+            sel_job=sel_job,
             sel_years_range=sel_years_range,
             include_125=include_125,
             sel_years_from_date=sel_years_from_date,  # <— NEW
@@ -348,10 +337,8 @@ def apply_filters(df_in: pd.DataFrame, F: dict) -> pd.DataFrame:
         out = out[out["DEPO"].isin(F["sel_depos"])]
     if F["sel_gender"] is not None and "GENDER" in out.columns:
         out = out[out["GENDER"].isin(F["sel_gender"])]
-    if F["sel_pers_grade"] is not None and "PERS_GRADE" in out.columns:
-        out = out[out["PERS_GRADE"].isin(F["sel_pers_grade"])]
-    if F["sel_jobtitle"] is not None and "JOBTITLE" in out.columns:
-        out = out[out["JOBTITLE"].isin(F["sel_jobtitle"])]
+    if F["sel_job"] is not None and "JOB_TYPE" in out.columns:
+        out = out[out["JOB_TYPE"].isin(F["sel_job"])]
     if F["sel_years_range"] is not None and "YEARS_OF_WORK" in out.columns:
         yrs = pd.to_numeric(out["YEARS_OF_WORK"], errors="coerce")
         lo, hi = float(F["sel_years_range"][0]), float(F["sel_years_range"][1])
@@ -379,20 +366,20 @@ def render_histograms(df_f: pd.DataFrame):
 
     hist_pct = st.toggle("Show histogram y-axis as %", value=False, key="hist_pct")
     gender_split = st.toggle("Split histograms by gender (M/F)", value=False, key="hist_gender_split")
-    facet_by_grade = st.toggle("Small multiples by PERS_GRADE", value=False, key="facet_by_grade")
+    facet_by_grade = st.toggle("Small multiples by JOB_TYPE", value=False, key="facet_by_grade")
 
     COLORS = {"Male": "#1f77b4", "Female": "#e377c2"}
     GENDERS = ["Male", "Female"]
 
     # -------------------------------------------------------------------------
-    # FACET VIEW (new) — one histogram per PERS_GRADE (both metrics)
+    # FACET VIEW (new) — one histogram per JOB_TYPE (both metrics)
     # -------------------------------------------------------------------------
-    if facet_by_grade and "PERS_GRADE" in df_hist.columns and not df_hist.empty:
+    if facet_by_grade and "JOB_TYPE" in df_hist.columns and not df_hist.empty:
         # ---------- A) Block size (bucketed 1..20, >20) ----------
         cats = [str(i) for i in range(1, 21)] + [">20"]
         recs = []
-        for grade in sorted(df_hist["PERS_GRADE"].dropna().unique().tolist()):
-            d_g = df_hist[df_hist["PERS_GRADE"] == grade]
+        for grade in sorted(df_hist["JOB_TYPE"].dropna().unique().tolist()):
+            d_g = df_hist[df_hist["JOB_TYPE"] == grade]
             s = pd.to_numeric(d_g["BLOCK_SIZE"], errors="coerce")
             s = s[s.notna() & (s > 0)]
             if s.empty:
@@ -404,16 +391,16 @@ def render_histograms(df_f: pd.DataFrame):
             else:
                 y = counts.astype(int)
             for b, v in zip(cats, y.values):
-                recs.append({"PERS_GRADE": str(grade), "bucket": b, "value": float(v)})
+                recs.append({"JOB_TYPE": str(grade), "bucket": b, "value": float(v)})
 
         if recs:
             df_bsize = pd.DataFrame(recs)
             fig_grid1 = px.bar(
                 df_bsize, x="bucket", y="value",
-                facet_col="PERS_GRADE", facet_col_wrap=4,
+                facet_col="JOB_TYPE", facet_col_wrap=4,
                 category_orders={"bucket": cats},
                 labels={"bucket": "Block size (1–20, >20)", "value": "% of blocks" if hist_pct else "Count"},
-                title="Distribution of Block Size — by PERS_GRADE"
+                title="Distribution of Block Size — by JOB_TYPE"
             )
             # After building the px.bar figure:
             fig_grid1.for_each_yaxis(lambda a: a.update(matches="y"))
@@ -426,10 +413,10 @@ def render_histograms(df_f: pd.DataFrame):
             st.plotly_chart(fig_grid1, use_container_width=True)
 
         # ---------- B) AN blocks per person (integer bins) ----------
-        # Attach one PERS_GRADE per NAME (mode)
-        if "PERS_GRADE" in df_hist.columns:
+        # Attach one JOB_TYPE per NAME (mode)
+        if "JOB_TYPE" in df_hist.columns:
             grade_per_name = (
-                df_hist.groupby("NAME")["PERS_GRADE"]
+                df_hist.groupby("NAME")["JOB_TYPE"]
                 .agg(lambda s: s.mode().iat[0] if not s.mode().empty
                      else (s.dropna().iloc[0] if s.dropna().size else pd.NA))
             )
@@ -442,11 +429,11 @@ def render_histograms(df_f: pd.DataFrame):
                    .rename(columns={"size": "NUM_BLOCKS"})
         ).merge(grade_per_name.reset_index(), on="NAME", how="left", validate="m:1")
 
-        if not blocks_per_person.empty and "PERS_GRADE" in blocks_per_person.columns:
+        if not blocks_per_person.empty and "JOB_TYPE" in blocks_per_person.columns:
             max_nb = int(blocks_per_person["NUM_BLOCKS"].max()) if not blocks_per_person.empty else 0
             recs2 = []
-            for grade in sorted(blocks_per_person["PERS_GRADE"].dropna().unique().tolist()):
-                d = blocks_per_person[blocks_per_person["PERS_GRADE"] == grade]
+            for grade in sorted(blocks_per_person["JOB_TYPE"].dropna().unique().tolist()):
+                d = blocks_per_person[blocks_per_person["JOB_TYPE"] == grade]
                 if d.empty:
                     continue
                 vc = d["NUM_BLOCKS"].value_counts().sort_index()
@@ -457,15 +444,15 @@ def render_histograms(df_f: pd.DataFrame):
                 else:
                     y = vc.astype(int)
                 for k, v in y.items():
-                    recs2.append({"PERS_GRADE": str(grade), "num_blocks": int(k), "value": float(v)})
+                    recs2.append({"JOB_TYPE": str(grade), "num_blocks": int(k), "value": float(v)})
 
             if recs2:
                 df_numblocks = pd.DataFrame(recs2)
                 fig_grid2 = px.bar(
                     df_numblocks, x="num_blocks", y="value",
-                    facet_col="PERS_GRADE", facet_col_wrap=4,
+                    facet_col="JOB_TYPE", facet_col_wrap=4,
                     labels={"num_blocks": "AN blocks per person (year)", "value": "% of employees" if hist_pct else "Employees"},
-                    title="Distribution of AN Blocks per Person — by PERS_GRADE"
+                    title="Distribution of AN Blocks per Person — by JOB_TYPE"
                 )
                 fig_grid2.for_each_yaxis(lambda a: a.update(matches="y"))
                 fig_grid2.update_layout(bargap=0.05, margin=dict(l=60, r=40, t=60, b=50))

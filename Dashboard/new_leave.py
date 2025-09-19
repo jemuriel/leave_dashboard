@@ -3,7 +3,7 @@ import numpy as np
 
 # --- Load & prep ---
 # path = r"C:\Users\61432\OneDrive - Pacific National\Leave_data\leave_data_v2.csv"
-path = r"C:\Users\61432\OneDrive - Pacific National\Leave_data\leave_data_latest.csv"
+path = r"C:\Users\61432\OneDrive - Pacific National\Leave_data\new_data_analysis\Leave_new_data.csv"
 df = pd.read_csv(path)
 
 # Build DATE from YEAR/MONTH/DAY and sort
@@ -12,7 +12,7 @@ df = pd.read_csv(path)
 #     errors="coerce"
 # )
 
-df['DATE'] = pd.to_datetime(df['DATE'], dayfirst=True)
+df['DATE'] = pd.to_datetime(df['DATE'], format='%m/%d/%Y %H:%M')
 
 df = df.sort_values(["NAME", "DATE"], kind="mergesort").reset_index(drop=True)
 
@@ -88,4 +88,4 @@ df.loc[first_idx_per_seg, out_cols.columns] = first_values[out_cols.columns].to_
 df = df.drop(columns=["seg_id"])
 
 # Save
-df.to_csv(r"C:\Users\61432\OneDrive - Pacific National\Leave_data\leave_analysis_latest_AN.csv", index=False)
+df.to_csv(r"C:\Users\61432\OneDrive - Pacific National\Leave_data\new_data_analysis\leave_analysis_new_data.csv", index=False)
