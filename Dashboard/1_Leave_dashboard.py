@@ -7,28 +7,28 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 from pathlib import Path
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # CONFIG
-# -----------------------------------------------------------------------------
+# =============================================================================
 st.set_page_config(page_title="Leave Granularity", layout="wide")
 
-# DEFAULT_PL_CSV = r"C:\Users\61432\OneDrive - Pacific National\Leave_data\dashboard_data\AN_vs_PL_latest.csv"
 # Resolve project root dynamically
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CSV_FOLDER = PROJECT_ROOT / "csv"
 
-# Updated path
-DEFAULT_PL_CSV = CSV_FOLDER / "an_pl_data.csv"
+DEFAULT_PL_CSV = CSV_FOLDER / "an_pl_ph_data.csv"
 SENTINEL_YEARS = 125  # special value
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # HELPERS (DATA LOADING / CLEANING)
-# -----------------------------------------------------------------------------
+# =============================================================================
 @st.cache_data
 def load_csv_upper(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     df.columns = [c.strip().upper() for c in df.columns]
     return df
+
 
 def coerce_blocksize(df: pd.DataFrame) -> pd.DataFrame:
     if "BLOCK_SIZE" not in df.columns:
@@ -39,6 +39,7 @@ def coerce_blocksize(df: pd.DataFrame) -> pd.DataFrame:
     out["BLOCK_SIZE"] = out["BLOCK_SIZE"].astype(int)
     return out
 
+
 def coerce_if_any_pl01(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "IF_ANY_PL" not in out.columns:
@@ -46,21 +47,34 @@ def coerce_if_any_pl01(df: pd.DataFrame) -> pd.DataFrame:
     s = out["IF_ANY_PL"]
     out["IF_ANY_PL"] = (
         pd.to_numeric(s, errors="coerce").gt(0)
-          .fillna(s.astype(str).str.strip().str.lower().isin({"1", "1.0", "y", "yes", "true", "t", "pl"}))
-          .astype(int)
+        .fillna(
+            s.astype(str)
+            .str.strip()
+            .str.lower()
+            .isin({"1", "1.0", "y", "yes", "true", "t", "pl"})
+        )
+        .astype(int)
     )
     return out
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # HELPERS (HEATMAP DATA & CHARTS)
-# -----------------------------------------------------------------------------
+# =============================================================================
 def make_heatmap(pivot: pd.DataFrame, title: str, y_title: str) -> go.Figure:
-    x_labels = [str(x) for x in pivot.columns]
-    y_labels = [str(y) for y in pivot.index]
+    # Keep only rows (y categories) that have at least one non-zero cell across x
+    numeric = pivot.apply(pd.to_numeric, errors="coerce").fillna(0)
+    row_has_values = numeric.gt(0).any(axis=1)
+
+    # If nothing has values, fall back to the original (avoids empty-figure issues)
+    data = pivot.loc[row_has_values] if row_has_values.any() else pivot
+
+    x_labels = [str(x) for x in data.columns]
+    y_labels = [str(y) for y in data.index]
 
     fig = go.Figure(
         data=go.Heatmap(
-            z=pivot.values,
+            z=data.values,
             x=x_labels,
             y=y_labels,
             colorscale="Viridis",
@@ -74,6 +88,9 @@ def make_heatmap(pivot: pd.DataFrame, title: str, y_title: str) -> go.Figure:
         type="category",
         categoryorder="array",
         categoryarray=x_labels,
+        tickmode="array",
+        tickvals=x_labels,
+        ticktext=x_labels,
         dtick=1,
     )
     fig.update_yaxes(
@@ -87,60 +104,73 @@ def make_heatmap(pivot: pd.DataFrame, title: str, y_title: str) -> go.Figure:
     fig.update_layout(title=title, margin=dict(l=60, r=40, t=70, b=50))
     return fig
 
+
+
 def pivot_allblocks(df_blocks: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     blocks_per_person = (
         df_blocks.groupby("NAME", as_index=False)
-                 .size()
-                 .rename(columns={"size": "NUM_BLOCKS"})
+        .size()
+        .rename(columns={"size": "NUM_BLOCKS"})
     )
     df_uniq = (
         df_blocks.drop_duplicates(["NAME", "BLOCK_SIZE"])
-                 .merge(blocks_per_person, on="NAME", how="left")
+        .merge(blocks_per_person, on="NAME", how="left")
     )
-    df_uniq["BLOCK_SIZE_BUCKET"] = df_uniq["BLOCK_SIZE"].where(df_uniq["BLOCK_SIZE"] <= 30, ">30")
-    df_uniq["NUM_BLOCKS_BUCKET"] = df_uniq["NUM_BLOCKS"].where(df_uniq["NUM_BLOCKS"] <= 10, ">10")
+
+    df_uniq["BLOCK_SIZE_BUCKET"] = df_uniq["BLOCK_SIZE"].where(
+        df_uniq["BLOCK_SIZE"] <= 30, ">30"
+    )
+    df_uniq["NUM_BLOCKS_BUCKET"] = df_uniq["NUM_BLOCKS"].where(
+        df_uniq["NUM_BLOCKS"] <= 10, ">10"
+    )
 
     x_order = list(range(1, 31)) + [">30"]
     y_order = list(range(1, 11)) + [">10"]
 
     heat = (
         df_uniq.groupby(["NUM_BLOCKS_BUCKET", "BLOCK_SIZE_BUCKET"])
-               .size()
-               .reset_index(name="COUNT")
+        .size()
+        .reset_index(name="COUNT")
     )
     pivot = (
         heat.pivot(index="NUM_BLOCKS_BUCKET", columns="BLOCK_SIZE_BUCKET", values="COUNT")
-            .reindex(index=y_order, columns=x_order)
-            .fillna(0)
+        .reindex(index=y_order, columns=x_order)
+        .fillna(0)
     )
     return pivot, df_uniq
+
 
 def pivot_plonly(df_pl: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     blocks_per_person_pl = (
         df_pl.groupby("NAME", as_index=False)
-             .size()
-             .rename(columns={"size": "NUM_PL_BLOCKS"})
+        .size()
+        .rename(columns={"size": "NUM_PL_BLOCKS"})
     )
     name_block_pl = df_pl.drop_duplicates(["NAME", "BLOCK_SIZE"])
     df_uniq_pl = name_block_pl.merge(blocks_per_person_pl, on="NAME", how="left")
 
-    df_uniq_pl["BLOCK_SIZE_BUCKET"] = df_uniq_pl["BLOCK_SIZE"].where(df_uniq_pl["BLOCK_SIZE"] <= 30, ">30")
-    df_uniq_pl["NUM_BLOCKS_BUCKET"] = df_uniq_pl["NUM_PL_BLOCKS"].where(df_uniq_pl["NUM_PL_BLOCKS"] <= 10, ">10")
+    df_uniq_pl["BLOCK_SIZE_BUCKET"] = df_uniq_pl["BLOCK_SIZE"].where(
+        df_uniq_pl["BLOCK_SIZE"] <= 30, ">30"
+    )
+    df_uniq_pl["NUM_BLOCKS_BUCKET"] = df_uniq_pl["NUM_PL_BLOCKS"].where(
+        df_uniq_pl["NUM_PL_BLOCKS"] <= 10, ">10"
+    )
 
     x_order = list(range(1, 31)) + [">30"]
     y_order = list(range(1, 11)) + [">10"]
 
     heat_pl = (
         df_uniq_pl.groupby(["NUM_BLOCKS_BUCKET", "BLOCK_SIZE_BUCKET"])
-                  .size()
-                  .reset_index(name="COUNT")
+        .size()
+        .reset_index(name="COUNT")
     )
     pivot_pl = (
         heat_pl.pivot(index="NUM_BLOCKS_BUCKET", columns="BLOCK_SIZE_BUCKET", values="COUNT")
-               .reindex(index=y_order, columns=x_order)
-               .fillna(0)
+        .reindex(index=y_order, columns=x_order)
+        .fillna(0)
     )
     return pivot_pl, df_uniq_pl
+
 
 def make_pl_rate_chart(df: pd.DataFrame, bars_as_percent: bool = True) -> go.Figure:
     if not {"BLOCK_SIZE", "IF_ANY_PL"}.issubset(df.columns):
@@ -149,12 +179,16 @@ def make_pl_rate_chart(df: pd.DataFrame, bars_as_percent: bool = True) -> go.Fig
     size = pd.to_numeric(df["BLOCK_SIZE"], errors="coerce")
     d = df.loc[size.notna() & (size > 0)].copy()
     size = size.loc[d.index]
-    d["SIZE_BUCKET"] = np.where(size > 15, ">15", size.clip(upper=15).astype(int).astype(str))
+    d["SIZE_BUCKET"] = np.where(
+        size > 15, ">15", size.clip(upper=15).astype(int).astype(str)
+    )
 
-    ct = (d.groupby(["SIZE_BUCKET", "IF_ANY_PL"])
-            .size()
-            .unstack(fill_value=0)
-            .rename(columns={0: "no_pl", 1: "pl"}))
+    ct = (
+        d.groupby(["SIZE_BUCKET", "IF_ANY_PL"])
+        .size()
+        .unstack(fill_value=0)
+        .rename(columns={0: "no_pl", 1: "pl"})
+    )
 
     if ct.empty:
         return go.Figure()
@@ -162,26 +196,31 @@ def make_pl_rate_chart(df: pd.DataFrame, bars_as_percent: bool = True) -> go.Fig
     ct["n"] = ct["no_pl"] + ct["pl"]
     total_n = ct["n"].sum()
     ct["pct_total"] = (ct["n"] / total_n * 100).fillna(0)
-    ct["pl_rate"]   = (ct["pl"] / ct["n"] * 100).fillna(0)
+    ct["pl_rate"] = (ct["pl"] / ct["n"] * 100).fillna(0)
 
     cats = [str(i) for i in range(1, 16)] + [">15"]
     ct = ct.reindex(cats)
 
     if bars_as_percent:
-        y_bars     = ct["pct_total"].fillna(0)
-        bar_name   = "% of total blocks"
-        bar_hover  = "Block size %{x}<br>% of total %{y:.1f}%<extra></extra>"
+        y_bars = ct["pct_total"].fillna(0)
+        bar_name = "% of total blocks"
+        bar_hover = "Block size %{x}<br>% of total %{y:.1f}%<extra></extra>"
         left_title = "% of total blocks"
     else:
-        y_bars     = ct["n"].fillna(0)
-        bar_name   = "# blocks"
-        bar_hover  = "Block size %{x}<br>Count %{y}<extra></extra>"
+        y_bars = ct["n"].fillna(0)
+        bar_name = "# blocks"
+        bar_hover = "Block size %{x}<br>Count %{y}<extra></extra>"
         left_title = "# blocks"
 
     y_line = ct["pl_rate"].fillna(0)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_bar(x=ct.index.tolist(), y=y_bars.tolist(), name=bar_name, hovertemplate=bar_hover)
+    fig.add_bar(
+        x=ct.index.tolist(),
+        y=y_bars.tolist(),
+        name=bar_name,
+        hovertemplate=bar_hover,
+    )
     fig.add_scatter(
         x=ct.index.tolist(),
         y=y_line.tolist(),
@@ -191,21 +230,147 @@ def make_pl_rate_chart(df: pd.DataFrame, bars_as_percent: bool = True) -> go.Fig
         secondary_y=True,
     )
 
-    left_max  = float(y_bars.max()) if len(y_bars) else 1.0
+    left_max = float(y_bars.max()) if len(y_bars) else 1.0
     right_max = float(y_line.max()) if len(y_line) else 1.0
-    left_max  = left_max or 1.0
+    left_max = left_max or 1.0
     right_max = right_max or 1.0
 
-    fig.update_xaxes(title_text="Block size (days)", categoryorder="array", categoryarray=cats)
-    fig.update_yaxes(title_text=left_title, range=[0, left_max],  secondary_y=False)
-    fig.update_yaxes(title_text="% with PL",  range=[0, right_max], secondary_y=True)
-    fig.update_layout(title="PL rate vs Block Size (bucketed)", legend_title="", bargap=0.15,
-                      margin=dict(l=60, r=40, t=70, b=50))
+    fig.update_xaxes(
+        title_text="Block size (days)",
+        type="category",
+        categoryorder="array",
+        categoryarray=cats,
+        tickmode="array",  # <- show ALL ticks
+        tickvals=cats,  # <- explicit tick positions
+        ticktext=cats,  # <- explicit tick labels
+        tickangle=0  # <- change to 45 if you need more space
+    )
+    fig.update_layout(xaxis=dict(automargin=True))
+
+    fig.update_yaxes(title_text=left_title, range=[0, left_max], secondary_y=False)
+    fig.update_yaxes(title_text="% with PL", range=[0, right_max], secondary_y=True)
+    fig.update_layout(
+        title="PL rate vs Block Size (bucketed)",
+        legend_title="",
+        bargap=0.15,
+        margin=dict(l=60, r=40, t=70, b=50),
+    )
     return fig
 
-# -----------------------------------------------------------------------------
+def make_pl_rate_chart_anph_true(df: pd.DataFrame, bars_as_percent: bool = True) -> go.Figure:
+    """
+    Same as make_pl_rate_chart, but only for rows where AN_PH == True.
+    Bars: distribution of block counts by size bucket (either % of total PH blocks or raw count).
+    Line: % with PL within each size bucket (PH rows only).
+    """
+    required = {"BLOCK_SIZE", "IF_ANY_PL", "AN_PH"}
+    if not required.issubset(df.columns):
+        return go.Figure()
+
+    # --- Robust AN_PH normalisation to boolean True/False ---
+    col = df["AN_PH"]
+    if pd.api.types.is_bool_dtype(col):
+        mask_true = col
+    else:
+        s = col.astype("string").str.strip().str.lower()
+        mask_true = s.isin({"true", "t", "1", "y", "yes"})
+
+    d0 = df.loc[mask_true].copy()
+    if d0.empty:
+        return go.Figure()
+
+    # --- Size buckets (1..15, >15) ---
+    size = pd.to_numeric(d0["BLOCK_SIZE"], errors="coerce")
+    d = d0.loc[size.notna() & (size > 0)].copy()
+    if d.empty:
+        return go.Figure()
+
+    size = size.loc[d.index]
+    d["SIZE_BUCKET"] = np.where(size > 15, ">15", size.clip(upper=15).astype(int).astype(str))
+
+    # --- Ensure IF_ANY_PL is 0/1 for grouping ---
+    if set(pd.unique(d["IF_ANY_PL"].dropna())) - {0, 1}:
+        s = pd.to_numeric(d["IF_ANY_PL"], errors="coerce").fillna(0)
+        d["IF_ANY_PL"] = (s > 0).astype(int)
+
+    # --- Cross-tab over buckets within PH==True subset ---
+    ct = d.groupby(["SIZE_BUCKET", "IF_ANY_PL"]).size().unstack()
+    # Guarantee both columns exist
+    for col_id in (0, 1):
+        if col_id not in ct.columns:
+            ct[col_id] = 0
+    ct = ct[[0, 1]].rename(columns={0: "no_pl", 1: "pl"})
+
+    if ct.empty:
+        return go.Figure()
+
+    ct["n"] = ct["no_pl"] + ct["pl"]
+    total_n = ct["n"].sum()
+    ct["pct_total"] = (ct["n"] / total_n * 100).fillna(0)
+    ct["pl_rate"] = (ct["pl"] / ct["n"] * 100).fillna(0)
+
+    cats = [str(i) for i in range(1, 16)] + [">15"]
+    ct = ct.reindex(cats)
+
+    if bars_as_percent:
+        y_bars = ct["pct_total"].fillna(0)
+        bar_name = "% of PH blocks"
+        bar_hover = "Block size %{x}<br>% of PH total %{y:.1f}%<extra></extra>"
+        left_title = "% of PH blocks"
+    else:
+        y_bars = ct["n"].fillna(0)
+        bar_name = "# PH blocks"
+        bar_hover = "Block size %{x}<br>Count %{y}<extra></extra>"
+        left_title = "# PH blocks"
+
+    y_line = ct["pl_rate"].fillna(0)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_bar(
+        x=ct.index.tolist(),
+        y=y_bars.tolist(),
+        name=bar_name,
+        hovertemplate=bar_hover,
+    )
+    fig.add_scatter(
+        x=ct.index.tolist(),
+        y=y_line.tolist(),
+        name="% with PL (PH only)",
+        mode="lines+markers",
+        hovertemplate="Block size %{x}<br>PL rate (PH only) %{y:.1f}%<extra></extra>",
+        secondary_y=True,
+    )
+
+    left_max = float(y_bars.max()) if len(y_bars) else 1.0
+    right_max = float(y_line.max()) if len(y_line) else 1.0
+    left_max = left_max or 1.0
+    right_max = right_max or 1.0
+
+    fig.update_xaxes(
+        title_text="Block size (days)",
+        type="category",
+        categoryorder="array",
+        categoryarray=cats,
+        tickmode="array",  # <- show ALL ticks
+        tickvals=cats,  # <- explicit tick positions
+        ticktext=cats,  # <- explicit tick labels
+        tickangle=0  # <- change to 45 if you need more space
+    )
+    fig.update_layout(xaxis=dict(automargin=True))
+
+    fig.update_yaxes(title_text=left_title, range=[0, left_max], secondary_y=False)
+    fig.update_yaxes(title_text="% with PL (PH only)", range=[0, right_max], secondary_y=True)
+    fig.update_layout(
+        title="PL rate vs Block Size — Public holidays only",
+        legend_title="",
+        bargap=0.15,
+        margin=dict(l=60, r=40, t=70, b=50),
+    )
+    return fig
+
+# =============================================================================
 # FILTER UI (SIDEBAR) + APPLY
-# -----------------------------------------------------------------------------
+# =============================================================================
 def sidebar_filter_controls(df: pd.DataFrame):
     """Render all filter widgets in sidebar and return a dict of selections.
        Preserves original session_state keys and 125-years inclusion logic."""
@@ -219,13 +384,18 @@ def sidebar_filter_controls(df: pd.DataFrame):
             sel_depo_groups = st.multiselect(
                 "DEPO_GROUP",
                 options=depo_group_opts,
-                default=st.session_state.get("sel_depo_groups", depo_group_opts) if depo_group_opts else None,
+                default=st.session_state.get("sel_depo_groups", depo_group_opts)
+                if depo_group_opts
+                else None,
                 key="sel_depo_groups",
             )
-        # dependent DEPO options
+
         base_for_depo = df.copy()
         if sel_depo_groups is not None and "DEPO_GROUP" in base_for_depo.columns:
-            base_for_depo = base_for_depo[base_for_depo["DEPO_GROUP"].isin(sel_depo_groups)]
+            base_for_depo = base_for_depo[
+                base_for_depo["DEPO_GROUP"].isin(sel_depo_groups)
+            ]
+
         sel_depos = None
         if "DEPO" in base_for_depo.columns:
             depo_opts = sorted(base_for_depo["DEPO"].dropna().unique().tolist())
@@ -253,7 +423,9 @@ def sidebar_filter_controls(df: pd.DataFrame):
             sel_gender = st.multiselect(
                 "GENDER",
                 options=gender_opts,
-                default=[g for g in prev_sel_gender if g in gender_opts] if gender_opts else None,
+                default=[g for g in prev_sel_gender if g in gender_opts]
+                if gender_opts
+                else None,
                 key="sel_gender",
             )
 
@@ -265,11 +437,13 @@ def sidebar_filter_controls(df: pd.DataFrame):
             sel_job = st.multiselect(
                 "JOB_TYPE",
                 options=job_opts,
-                default=[g for g in prev_sel_job if g in job_opts] if job_opts else None,
+                default=[g for g in prev_sel_job if g in job_opts]
+                if job_opts
+                else None,
                 key="sel_job",
             )
 
-        # Row 3: Years-of-work slider with 125 inclusion logic
+        # Row 4: Years-of-work slider with 125 inclusion logic
         sel_years_range = None
         include_125 = False
         if "YEARS_OF_WORK" in _base.columns:
@@ -292,18 +466,24 @@ def sidebar_filter_controls(df: pd.DataFrame):
                     "YEARS_OF_WORK",
                     min_value=int(y_min) if step_is_int else y_min,
                     max_value=int(y_max) if step_is_int else y_max,
-                    value=(int(default_lo), int(default_hi)) if step_is_int else (default_lo, default_hi),
+                    value=(int(default_lo), int(default_hi))
+                    if step_is_int
+                    else (default_lo, default_hi),
                     step=step,
                     key="sel_years_range",
                 )
 
                 hi = float(sel_years_range[1])
-                include_125 = (int(hi) == int(y_max)) if step_is_int else np.isclose(hi, y_max, rtol=0, atol=1e-9)
+                include_125 = (
+                    int(hi) == int(y_max)
+                    if step_is_int
+                    else np.isclose(hi, y_max, rtol=0, atol=1e-9)
+                )
             else:
                 sel_years_range = None
                 include_125 = True
 
-        # --- NEW: Year filter (from DATE) — at the BOTTOM of the sidebar ---
+        # Year filter from DATE (at bottom)
         sel_years_from_date = None
         if "DATE" in _base.columns:
             _dates = pd.to_datetime(_base["DATE"], errors="coerce")
@@ -324,10 +504,10 @@ def sidebar_filter_controls(df: pd.DataFrame):
             sel_job=sel_job,
             sel_years_range=sel_years_range,
             include_125=include_125,
-            sel_years_from_date=sel_years_from_date,  # <— NEW
+            sel_years_from_date=sel_years_from_date,
         )
-
         return selections
+
 
 def apply_filters(df_in: pd.DataFrame, F: dict) -> pd.DataFrame:
     out = df_in.copy()
@@ -348,34 +528,56 @@ def apply_filters(df_in: pd.DataFrame, F: dict) -> pd.DataFrame:
         out = out[keep]
     return out
 
-# -----------------------------------------------------------------------------
-# HISTOGRAMS
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# HISTOGRAMS (with AN_PH split toggle)
+# =============================================================================
 def render_histograms(df_f: pd.DataFrame):
     st.subheader("Distributions")
 
+    # Copy + normalise gender
     df_hist = df_f.copy()
     if "GENDER" in df_hist.columns:
         g = df_hist["GENDER"].astype("string").str.strip().str.lower()
         df_hist["GENDER_N"] = (
             g.map({"m": "Male", "male": "Male", "f": "Female", "female": "Female"})
-             .astype("string")
+            .astype("string")
         )
     else:
         df_hist["GENDER_N"] = pd.Series(pd.NA, index=df_hist.index, dtype="string")
 
+    # Toggles
     hist_pct = st.toggle("Show histogram y-axis as %", value=False, key="hist_pct")
     gender_split = st.toggle("Split histograms by gender (M/F)", value=False, key="hist_gender_split")
     facet_by_grade = st.toggle("Small multiples by JOB_TYPE", value=False, key="facet_by_grade")
+    anph_split = st.toggle("Split histograms by PH (True/False)", value=False, key="hist_anph_split")
+
+    # Normalise AN_PH to labelled groups (no filtering)
+    if "AN_PH" in df_hist.columns:
+        col = df_hist["AN_PH"]
+        if pd.api.types.is_bool_dtype(col):
+            anph_bool = col
+        else:
+            anph_bool = (
+                col.astype("string").str.strip().str.upper().map({"TRUE": True, "FALSE": False})
+            )
+        df_hist["AN_PH_N"] = anph_bool.map({True: "AN_PH=True", False: "AN_PH=False"})
+    else:
+        df_hist["AN_PH_N"] = pd.Series(pd.NA, index=df_hist.index, dtype="string")
+
+    # Split precedence: AN_PH > Gender > None
+    split_mode = "anph" if anph_split and df_hist["AN_PH_N"].notna().any() else (
+        "gender" if gender_split else None
+    )
 
     COLORS = {"Male": "#1f77b4", "Female": "#e377c2"}
-    GENDERS = ["Male", "Female"]
+    ANPH_COLORS = {"AN_PH=True": "#2ca02c", "AN_PH=False": "#ff7f0e"}
 
     # -------------------------------------------------------------------------
-    # FACET VIEW (new) — one histogram per JOB_TYPE (both metrics)
+    # FACET VIEW (by JOB_TYPE)
     # -------------------------------------------------------------------------
     if facet_by_grade and "JOB_TYPE" in df_hist.columns and not df_hist.empty:
-        # ---------- A) Block size (bucketed 1..20, >20) ----------
+        # A) Block size distribution
         cats = [str(i) for i in range(1, 21)] + [">20"]
         recs = []
         for grade in sorted(df_hist["JOB_TYPE"].dropna().unique().tolist()):
@@ -384,133 +586,184 @@ def render_histograms(df_f: pd.DataFrame):
             s = s[s.notna() & (s > 0)]
             if s.empty:
                 continue
+
             bucket = np.where(s > 20, ">20", s.clip(upper=20).astype(int).astype(str))
-            counts = pd.Series(bucket, dtype="object").value_counts().reindex(cats, fill_value=0)
-            if hist_pct and counts.sum():
-                y = (counts / counts.sum() * 100).astype(float)
+            if split_mode == "anph":
+                grp = d_g.loc[s.index, "AN_PH_N"].fillna("Unknown")
+            elif split_mode == "gender":
+                grp = d_g.loc[s.index, "GENDER_N"].fillna("Unknown")
             else:
-                y = counts.astype(int)
-            for b, v in zip(cats, y.values):
-                recs.append({"JOB_TYPE": str(grade), "bucket": b, "value": float(v)})
+                grp = pd.Series(["All"] * len(s), index=s.index, dtype="object")
+
+            df_tmp = pd.DataFrame({"bucket": bucket, "group": grp, "JOB_TYPE": str(grade)})
+            counts = (
+                df_tmp.groupby(["JOB_TYPE", "group", "bucket"])
+                .size()
+                .rename("value")
+                .reset_index()
+            )
+            counts["bucket"] = pd.Categorical(counts["bucket"], categories=cats, ordered=True)
+            counts = counts.sort_values(["JOB_TYPE", "group", "bucket"])
+
+            if hist_pct:
+                counts["value"] = counts.groupby(["JOB_TYPE", "group"])["value"].transform(
+                    lambda v: (v / v.sum() * 100.0) if v.sum() else v
+                )
+            recs.append(counts)
 
         if recs:
-            df_bsize = pd.DataFrame(recs)
+            df_bsize = pd.concat(recs, ignore_index=True)
             fig_grid1 = px.bar(
-                df_bsize, x="bucket", y="value",
-                facet_col="JOB_TYPE", facet_col_wrap=4,
+                df_bsize,
+                x="bucket",
+                y="value",
+                facet_col="JOB_TYPE",
+                facet_col_wrap=4,
+                color="group" if split_mode else None,
                 category_orders={"bucket": cats},
-                labels={"bucket": "Block size (1–20, >20)", "value": "% of blocks" if hist_pct else "Count"},
-                title="Distribution of Block Size — by JOB_TYPE"
+                labels={
+                    "bucket": "Block size (1–20, >20)",
+                    "value": "% of blocks" if hist_pct else "Count",
+                },
+                title="Distribution of Block Size — by JOB_TYPE",
             )
-            # After building the px.bar figure:
             fig_grid1.for_each_yaxis(lambda a: a.update(matches="y"))
+            if split_mode in {"anph", "gender"}:
+                fig_grid1.update_traces(opacity=0.6)
+                fig_grid1.update_layout(barmode="overlay")
+                if split_mode == "anph":
+                    fig_grid1.for_each_trace(
+                        lambda t: t.update(marker_color=ANPH_COLORS.get(t.name, None))
+                    )
             fig_grid1.update_layout(bargap=0.05, margin=dict(l=60, r=40, t=60, b=50))
-            # keep consistent y range per subplot if using %
             if hist_pct and not df_bsize.empty:
-                ymax = min(100.0, max(1.0, df_bsize["value"].max() * 1.08))
-                # fig_grid1.update_yaxes(matches=True, range=[0, ymax])
+                ymax = min(100.0, max(1.0, float(df_bsize["value"].max()) * 1.08))
                 fig_grid1.layout.yaxis.update(range=[0, ymax])
             st.plotly_chart(fig_grid1, use_container_width=True)
 
-        # ---------- B) AN blocks per person (integer bins) ----------
-        # Attach one JOB_TYPE per NAME (mode)
-        if "JOB_TYPE" in df_hist.columns:
-            grade_per_name = (
-                df_hist.groupby("NAME")["JOB_TYPE"]
-                .agg(lambda s: s.mode().iat[0] if not s.mode().empty
-                     else (s.dropna().iloc[0] if s.dropna().size else pd.NA))
-            )
-        else:
-            grade_per_name = pd.Series(dtype="object")
-
+        # B) AN blocks per person
+        grade_per_name = (
+            df_hist.groupby("NAME")["JOB_TYPE"]
+            .agg(lambda s: s.mode().iat[0] if not s.mode().empty else (s.dropna().iloc[0] if s.dropna().size else pd.NA))
+        )
         blocks_per_person = (
-            df_hist.groupby("NAME", as_index=False)
-                   .size()
-                   .rename(columns={"size": "NUM_BLOCKS"})
-        ).merge(grade_per_name.reset_index(), on="NAME", how="left", validate="m:1")
+            df_hist.groupby("NAME", as_index=False).size().rename(columns={"size": "NUM_BLOCKS"})
+        ).merge(grade_per_name.reset_index(), on="NAME", how="left")
 
-        if not blocks_per_person.empty and "JOB_TYPE" in blocks_per_person.columns:
-            max_nb = int(blocks_per_person["NUM_BLOCKS"].max()) if not blocks_per_person.empty else 0
-            recs2 = []
-            for grade in sorted(blocks_per_person["JOB_TYPE"].dropna().unique().tolist()):
-                d = blocks_per_person[blocks_per_person["JOB_TYPE"] == grade]
+        recs2 = []
+        if not blocks_per_person.empty:
+            if split_mode == "anph":
+                group_per_name = (
+                    df_hist.groupby("NAME")["AN_PH_N"]
+                    .agg(lambda s: s.mode().iat[0] if not s.mode().empty else (s.dropna().iloc[0] if s.dropna().size else "Unknown"))
+                )
+            elif split_mode == "gender":
+                group_per_name = (
+                    df_hist.groupby("NAME")["GENDER_N"]
+                    .agg(lambda s: s.mode().iat[0] if not s.mode().empty else (s.dropna().iloc[0] if s.dropna().size else "Unknown"))
+                )
+            else:
+                group_per_name = pd.Series("All", index=blocks_per_person["NAME"].unique(), dtype="object")
+
+            bpp2 = blocks_per_person.merge(
+                group_per_name.rename("GROUP").reset_index(), on="NAME", how="left"
+            )
+            max_nb = int(bpp2["NUM_BLOCKS"].max()) if not bpp2.empty else 0
+
+            for grade in sorted(bpp2["JOB_TYPE"].dropna().unique().tolist()):
+                d = bpp2[bpp2["JOB_TYPE"] == grade]
                 if d.empty:
                     continue
-                vc = d["NUM_BLOCKS"].value_counts().sort_index()
-                if max_nb > 0:
-                    vc = vc.reindex(range(1, max_nb + 1), fill_value=0)
-                if hist_pct and vc.sum():
-                    y = (vc / vc.sum() * 100).astype(float)
+                if split_mode:
+                    for grp_name, d_grp in d.groupby("GROUP"):
+                        vc = d_grp["NUM_BLOCKS"].value_counts().sort_index()
+                        if max_nb > 0:
+                            vc = vc.reindex(range(1, max_nb + 1), fill_value=0)
+                        y = (vc / vc.sum() * 100.0) if (hist_pct and vc.sum()) else vc
+                        for k, v in y.items():
+                            recs2.append(
+                                {
+                                    "JOB_TYPE": str(grade),
+                                    "group": str(grp_name),
+                                    "num_blocks": int(k),
+                                    "value": float(v),
+                                }
+                            )
                 else:
-                    y = vc.astype(int)
-                for k, v in y.items():
-                    recs2.append({"JOB_TYPE": str(grade), "num_blocks": int(k), "value": float(v)})
+                    vc = d["NUM_BLOCKS"].value_counts().sort_index()
+                    if max_nb > 0:
+                        vc = vc.reindex(range(1, max_nb + 1), fill_value=0)
+                    y = (vc / vc.sum() * 100.0) if (hist_pct and vc.sum()) else vc
+                    for k, v in y.items():
+                        recs2.append(
+                            {"JOB_TYPE": str(grade), "group": "All", "num_blocks": int(k), "value": float(v)}
+                        )
 
-            if recs2:
-                df_numblocks = pd.DataFrame(recs2)
-                fig_grid2 = px.bar(
-                    df_numblocks, x="num_blocks", y="value",
-                    facet_col="JOB_TYPE", facet_col_wrap=4,
-                    labels={"num_blocks": "AN blocks per person (year)", "value": "% of employees" if hist_pct else "Employees"},
-                    title="Distribution of AN Blocks per Person — by JOB_TYPE"
-                )
-                fig_grid2.for_each_yaxis(lambda a: a.update(matches="y"))
-                fig_grid2.update_layout(bargap=0.05, margin=dict(l=60, r=40, t=60, b=50))
-                # centre integer ticks visually
-                if not df_numblocks.empty:
-                    fig_grid2.update_xaxes(tickmode="linear", dtick=1)
-                if hist_pct and not df_numblocks.empty:
-                    ymax2 = min(100.0, max(1.0, df_numblocks["value"].max() * 1.08))
-                    # fig_grid2.update_yaxes(matches=True, range=[0, ymax2])
-                    fig_grid2.layout.yaxis.update(range=[0, ymax2])
-                st.plotly_chart(fig_grid2, use_container_width=True)
+        if recs2:
+            df_numblocks = pd.DataFrame(recs2)
+            fig_grid2 = px.bar(
+                df_numblocks,
+                x="num_blocks",
+                y="value",
+                facet_col="JOB_TYPE",
+                facet_col_wrap=4,
+                color="group" if split_mode else None,
+                labels={
+                    "num_blocks": "AN blocks per person (year)",
+                    "value": "% of employees" if hist_pct else "Employees",
+                },
+                title="Distribution of AN Blocks per Person — by JOB_TYPE",
+            )
+            fig_grid2.for_each_yaxis(lambda a: a.update(matches="y"))
+            if split_mode in {"anph", "gender"}:
+                fig_grid2.update_traces(opacity=0.6)
+                fig_grid2.update_layout(barmode="overlay")
+                if split_mode == "anph":
+                    fig_grid2.for_each_trace(
+                        lambda t: t.update(marker_color=ANPH_COLORS.get(t.name, None))
+                    )
+            fig_grid2.update_layout(bargap=0.05, margin=dict(l=60, r=40, t=60, b=50))
+            if not df_numblocks.empty:
+                fig_grid2.update_xaxes(tickmode="linear", dtick=1)
+            if hist_pct and not df_numblocks.empty:
+                ymax2 = min(100.0, max(1.0, float(df_numblocks["value"].max()) * 1.08))
+                fig_grid2.layout.yaxis.update(range=[0, ymax2])
+            st.plotly_chart(fig_grid2, use_container_width=True)
 
-        # Facet view replaces the two single charts to keep things tidy.
-        return
+        return  # end facet branch
 
     # -------------------------------------------------------------------------
-    # ORIGINAL TWO HISTOGRAMS (unchanged behaviour)
+    # ORIGINAL TWO HISTOGRAMS (single view)
     # -------------------------------------------------------------------------
     if {"NAME", "BLOCK_SIZE"}.issubset(df_hist.columns) and not df_hist.empty:
-
         blocks_per_person = (
             df_hist.groupby("NAME", as_index=False)
-                   .size()
-                   .rename(columns={"size": "NUM_BLOCKS"})
+            .size()
+            .rename(columns={"size": "NUM_BLOCKS"})
         )
 
         c1, c2 = st.columns(2)
 
-        # --- Left: Distribution of Block Size (bucketed 1..20, >20)
+        # Left: Distribution of Block Size (bucketed 1..20, >20)
         with c1:
             cats = [str(i) for i in range(1, 21)] + [">20"]
 
-            if not gender_split:
+            if not split_mode:
                 s = pd.to_numeric(df_hist["BLOCK_SIZE"], errors="coerce")
                 s = s[s.notna() & (s > 0)]
                 bucket = np.where(s > 20, ">20", s.clip(upper=20).astype(int).astype(str))
                 counts = pd.Series(bucket, dtype="object").value_counts().reindex(cats, fill_value=0)
-
                 if hist_pct:
                     y = (counts / counts.sum() * 100) if counts.sum() else counts.astype(float)
                     y_title = "% of blocks"
-                    y_max = float(y.max()) if counts.sum() else 0.0
-                    head = min(100.0, max(1.0, y_max * 1.08))
-                    y_range = [0, head]; y_upper = head
                 else:
                     y = counts.values
                     y_title = "Count"
-                    y_range = None
-                    y_upper = float(counts.max()) * 1.08 if counts.sum() else 1.0
-
                 fig_h1 = go.Figure(go.Bar(x=cats, y=y, name="All blocks"))
-            else:
-                fig_h1 = go.Figure()
-                y_upper = 1.0
-                y_range = None
-                y_max_all = 0.0
 
-                for gname in GENDERS:
+            elif split_mode == "gender":
+                fig_h1 = go.Figure()
+                for gname in ["Male", "Female"]:
                     d_g = df_hist[df_hist["GENDER_N"] == gname]
                     if d_g.empty:
                         continue
@@ -518,28 +771,27 @@ def render_histograms(df_f: pd.DataFrame):
                     s = s[s.notna() & (s > 0)]
                     bucket = np.where(s > 20, ">20", s.clip(upper=20).astype(int).astype(str))
                     counts = pd.Series(bucket, dtype="object").value_counts().reindex(cats, fill_value=0)
-
-                    if hist_pct and counts.sum():
-                        y = counts / counts.sum() * 100
-                        y_max_all = max(y_max_all, float(y.max()))
-                    else:
-                        y = counts
-                        y_max_all = max(y_max_all, float(counts.max()))
-
+                    y = (counts / counts.sum() * 100) if (hist_pct and counts.sum()) else counts
                     fig_h1.add_bar(
-                        x=cats,
-                        y=y.values.tolist(),
-                        name=gname,
-                        opacity=0.6,
-                        marker_color=COLORS.get(gname, None),
+                        x=cats, y=y.values.tolist(), name=gname, opacity=0.6, marker_color=COLORS.get(gname, None)
                     )
+                fig_h1.update_layout(barmode="overlay")
+                y_title = "% of blocks" if hist_pct else "Count"
 
-                if hist_pct:
-                    head = min(100.0, max(1.0, y_max_all * 1.08))
-                    y_range = [0, head]; y_upper = head
-                else:
-                    y_upper = max(1.0, y_max_all * 1.08)
-
+            else:  # split_mode == "anph"
+                fig_h1 = go.Figure()
+                for gname in ["AN_PH=True", "AN_PH=False"]:
+                    d_g = df_hist[df_hist["AN_PH_N"] == gname]
+                    if d_g.empty:
+                        continue
+                    s = pd.to_numeric(d_g["BLOCK_SIZE"], errors="coerce")
+                    s = s[s.notna() & (s > 0)]
+                    bucket = np.where(s > 20, ">20", s.clip(upper=20).astype(int).astype(str))
+                    counts = pd.Series(bucket, dtype="object").value_counts().reindex(cats, fill_value=0)
+                    y = (counts / counts.sum() * 100) if (hist_pct and counts.sum()) else counts
+                    fig_h1.add_bar(
+                        x=cats, y=y.values.tolist(), name=gname, opacity=0.6, marker_color=ANPH_COLORS.get(gname, None)
+                    )
                 fig_h1.update_layout(barmode="overlay")
                 y_title = "% of blocks" if hist_pct else "Count"
 
@@ -551,39 +803,14 @@ def render_histograms(df_f: pd.DataFrame):
                 margin=dict(l=60, r=40, t=60, b=50),
                 xaxis=dict(type="category"),
             )
-            if y_range is not None:
-                fig_h1.update_yaxes(range=y_range)
-
-            # 80% cumulative vertical line (overall)
-            s_all = pd.to_numeric(df_hist["BLOCK_SIZE"], errors="coerce")
-            s_all = s_all[s_all.notna() & (s_all > 0)]
-            if len(s_all):
-                bucket_all = np.where(s_all > 20, ">20", s_all.clip(upper=20).astype(int).astype(str))
-                counts_all = pd.Series(bucket_all, dtype="object").value_counts().reindex(cats, fill_value=0)
-                if counts_all.sum():
-                    cum_pct = (counts_all.cumsum() / counts_all.sum()) * 100
-                    thr_idx = int(np.argmax(cum_pct.values > 80))
-                    thr_cat = cats[thr_idx]
-                    fig_h1.add_scatter(
-                        x=[thr_cat, thr_cat],
-                        y=[0, y_upper],
-                        mode="lines",
-                        line=dict(dash="dash", width=2),
-                        name="80% cumulative",
-                        hoverinfo="skip",
-                        showlegend=False,
-                    )
-
             st.plotly_chart(fig_h1, use_container_width=True)
 
-        # --- Right: Distribution of AN Blocks per Person
+        # Right: Distribution of AN Blocks per Person
         with c2:
-            # Attach one gender per NAME (mode)
             if "GENDER_N" in df_hist.columns:
                 gender_per_name = (
                     df_hist.groupby("NAME")["GENDER_N"]
-                    .agg(lambda s: s.mode().iat[0] if not s.mode().empty
-                    else (s.dropna().iloc[0] if s.dropna().size else pd.NA))
+                    .agg(lambda s: s.mode().iat[0] if not s.mode().empty else (s.dropna().iloc[0] if s.dropna().size else pd.NA))
                 )
                 bpp = (
                     df_hist.groupby("NAME", as_index=False)
@@ -592,25 +819,25 @@ def render_histograms(df_f: pd.DataFrame):
                     .merge(gender_per_name.reset_index(), on="NAME", how="left")
                 )
             else:
-                bpp = blocks_per_person.assign(GENDER_N=pd.Series(pd.NA, index=blocks_per_person.index, dtype="string"))
+                bpp = blocks_per_person.assign(
+                    GENDER_N=pd.Series(pd.NA, index=blocks_per_person.index, dtype="string")
+                )
 
             max_nb = int(bpp["NUM_BLOCKS"].max()) if not bpp.empty else 0
 
-            if not gender_split:
+            if not split_mode:
                 fig_h2 = go.Figure(
                     go.Histogram(
                         x=blocks_per_person["NUM_BLOCKS"],
                         xbins=dict(start=1, end=max_nb + 1, size=1) if max_nb > 0 else None,
                         histnorm="percent" if hist_pct else None,
-                        hovertemplate=("AN blocks per person %{x}<br>"
-                                       + ("% of employees %{y:.1f}%" if hist_pct else "Employees %{y}")
-                                       + "<extra></extra>"),
                         name="All employees",
                     )
                 )
-            else:
+
+            elif split_mode == "gender":
                 fig_h2 = go.Figure()
-                for gname in GENDERS:
+                for gname in ["Male", "Female"]:
                     d = bpp[bpp["GENDER_N"] == gname]
                     if d.empty:
                         continue
@@ -621,9 +848,29 @@ def render_histograms(df_f: pd.DataFrame):
                         opacity=0.6,
                         name=gname,
                         marker_color=COLORS.get(gname, None),
-                        hovertemplate=("AN blocks per person %{x}<br>"
-                                       + ("% of employees %{y:.1f}%" if hist_pct else "Employees %{y}")
-                                       + f"<br>Gender: {gname}<extra></extra>"),
+                    )
+                fig_h2.update_layout(barmode="overlay")
+
+            else:  # split_mode == "anph"
+                fig_h2 = go.Figure()
+                anph_per_name = (
+                    df_hist.groupby("NAME")["AN_PH_N"]
+                    .agg(lambda s: s.mode().iat[0] if not s.mode().empty else (s.dropna().iloc[0] if s.dropna().size else pd.NA))
+                )
+                bpp_anph = blocks_per_person.merge(
+                    anph_per_name.rename("AN_PH_N").reset_index(), on="NAME", how="left"
+                )
+                for gname in ["AN_PH=True", "AN_PH=False"]:
+                    d = bpp_anph[bpp_anph["AN_PH_N"] == gname]
+                    if d.empty:
+                        continue
+                    fig_h2.add_histogram(
+                        x=d["NUM_BLOCKS"],
+                        xbins=dict(start=1, end=max_nb + 1, size=1) if max_nb > 0 else None,
+                        histnorm="percent" if hist_pct else None,
+                        opacity=0.6,
+                        name=gname,
+                        marker_color=ANPH_COLORS.get(gname, None),
                     )
                 fig_h2.update_layout(barmode="overlay")
 
@@ -635,46 +882,21 @@ def render_histograms(df_f: pd.DataFrame):
                 margin=dict(l=60, r=40, t=60, b=50),
             )
 
-            # Centre integer ticks
+            # Centre integer ticks visually
             if max_nb > 0:
                 tickvals = [i + 0.5 for i in range(1, max_nb + 1)]
                 ticktext = list(range(1, max_nb + 1))
                 fig_h2.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
 
-            # 80% cumulative vertical line (overall)
-            vc = blocks_per_person["NUM_BLOCKS"].value_counts().sort_index()
-            if max_nb > 0:
-                vc = vc.reindex(range(1, max_nb + 1), fill_value=0)
-            if vc.sum():
-                if hist_pct:
-                    pct2 = (vc / vc.sum() * 100)
-                    y_max2 = float(pct2.max())
-                    headroom2 = min(100.0, max(1.0, y_max2 * 1.08))
-                    fig_h2.update_yaxes(range=[0, headroom2])
-                    y_upper2 = headroom2
-                else:
-                    y_upper2 = float(vc.max()) * 1.08
-
-                cum_pct2 = (vc.cumsum() / vc.sum()) * 100
-                thr_idx2 = int(np.argmax(cum_pct2.values > 80))
-                thr_x = list(cum_pct2.index)[thr_idx2]
-                fig_h2.add_scatter(
-                    x=[thr_x, thr_x],
-                    y=[0, y_upper2],
-                    mode="lines",
-                    line=dict(dash="dash", width=2),
-                    name="80% cumulative",
-                    hoverinfo="skip",
-                    showlegend=False,
-                )
-
             st.plotly_chart(fig_h2, use_container_width=True)
+
     else:
         st.info("CSV must include 'NAME' and 'BLOCK_SIZE' to draw the histograms.")
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # MAIN
-# -----------------------------------------------------------------------------
+# =============================================================================
 def main():
     st.title("Employee AN Dashboard")
 
@@ -691,10 +913,10 @@ def main():
     filters = sidebar_filter_controls(df)
     df_f = apply_filters(df, filters)
 
-    # Histograms (exact behaviour)
+    # Histograms
     render_histograms(df_f)
 
-    # Heatmaps (unchanged)
+    # Heatmaps
     tab_all, tab_pl = st.tabs(["AN blocks (all)", "PL blocks (IF_ANY_PL == 1)"])
     with tab_all:
         if {"NAME", "BLOCK_SIZE"}.issubset(df_f.columns):
@@ -705,6 +927,33 @@ def main():
                 y_title="AN blocks per person (per year)",
             )
             st.plotly_chart(fig_all, use_container_width=True)
+
+            # -------------------- NEW: AN_PH == TRUE heatmap (placed below the current one) --------------------
+            if "AN_PH" in df_f.columns:
+                col = df_f["AN_PH"]
+                # Robust normalisation to boolean True/False
+                if pd.api.types.is_bool_dtype(col):
+                    mask_true = col
+                else:
+                    mask_true = (
+                        col.astype("string").str.strip().str.upper().map({"TRUE": True, "FALSE": False})
+                    )
+
+                df_anph_true = df_f[mask_true == True].copy()
+                if not df_anph_true.empty:
+                    pivot_true, _ = pivot_allblocks(df_anph_true)
+                    fig_true = make_heatmap(
+                        pivot_true,
+                        title="Employees by (Number of AN Blocks × Block Size) — Public Holidays Only",
+                        y_title="AN blocks per person (per year)",
+                    )
+                    st.plotly_chart(fig_true, use_container_width=True)
+                else:
+                    st.info("No rows with AN_PH == TRUE after filters.")
+            else:
+                st.info("CSV has no 'AN_PH' column — cannot build AN_PH==TRUE heatmap.")
+            # ---------------------------------------------------------------------------------------------------
+
         else:
             st.error("CSV must contain 'NAME' and 'BLOCK_SIZE' for the AN heatmap.")
 
@@ -730,7 +979,7 @@ def main():
     with st.expander("Data snapshot (first 50 rows)"):
         st.dataframe(df_f.head(50))
 
-    # PL rate chart with toggle (unchanged)
+    # PL rate chart with toggle
     st.markdown("---")
     st.subheader("PL rate vs Block Size")
     bars_as_percent = st.toggle("Show bars as % of total", value=True)
@@ -745,6 +994,15 @@ def main():
                 st.info("Not enough data to render the PL rate chart.")
     else:
         st.info("CSV must include 'BLOCK_SIZE' and 'IF_ANY_PL' to render the PL rate chart.")
+
+    st.subheader("PL rate vs Block Size — Public holidays only")
+    bars_as_percent_ph = st.toggle("Show bars as % of total (PH only)", value=True, key="bars_as_percent_ph")
+    fig_rate_ph = make_pl_rate_chart_anph_true(df_f, bars_as_percent=bars_as_percent_ph)
+    if fig_rate_ph.data:
+        st.plotly_chart(fig_rate_ph, use_container_width=True)
+    else:
+        st.info("No PH-only data available after filters.")
+
 
 if __name__ == "__main__":
     main()
